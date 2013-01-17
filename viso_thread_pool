@@ -1,0 +1,122 @@
+/*
+ * viso_thread_pool.c
+ *
+ *  Created on: 2008-1-5
+ *      Author: Administrator
+ */
+
+#include "../inc/viso_thread_pool.h"
+
+void *viso_threadPool_routine(void *arg);
+
+static viso_thread_pool *g_pool = NULL;
+
+/*
+ * 初始化一个线程池
+ * thread_num 线程数量
+ */
+int viso_threadPool_init(unsigned int thread_num) {
+  g_pool = (viso_thread_pool *) malloc(sizeof(viso_thread_pool));
+	if (NULL == g_pool)
+		return -1;
+
+	pthread_mutex_init(&g_pool->pool_lock, NULL );
+	pthread_cond_init(&g_pool->job_ready, NULL );
+	g_pool->jobs = NULL;
+	g_pool->thread_num = thread_num;
+	g_pool->size = 0;
+	g_pool->destroy = 0;
+	g_pool->threads = (pthread_t *) malloc(thread_num * sizeof(pthread_t));
+
+	int i;
+	for (i = 0; i < thread_num; i++)
+		pthread_create(&g_pool->threads[i], NULL, viso_threadPool_routine, NULL );
+
+	return 0;
+}
+
+/*
+ * 将一个函数加入线程池
+ * poocess 函数指针,其原型为void *(*)(void *)
+ * arg 传入参数
+ */
+int viso_threadPool_addJob(void *(*process)(void *), void *arg) {
+	viso_job *newjob = (viso_job *) malloc(sizeof(viso_job));
+	newjob->process = process;
+	newjob->arg = arg;
+	newjob->next = NULL;
+
+	pthread_mutex_lock(&g_pool->pool_lock);
+	viso_job *temp = g_pool->jobs;
+	if (temp != NULL ) {
+		while (temp->next)
+			temp = temp->next;
+		temp->next = newjob;
+	} else {
+		g_pool->jobs = newjob;
+	}
+
+	//assert(g_pool->jobs != NULL );
+	g_pool->size++;
+	pthread_mutex_unlock(&(g_pool->pool_lock));
+	pthread_cond_signal(&(g_pool->job_ready));
+
+	return 0;
+}
+
+/*
+ * 释放线程池资源
+ */
+int viso_threadPool_destroy(void) {
+	if (g_pool->destroy)
+		return -1;
+
+	int i;
+	g_pool->destroy = 1;
+	pthread_cond_broadcast(&g_pool->job_ready);
+	for (i = 0; i < g_pool->thread_num; i++)
+		pthread_join(g_pool->threads[i], NULL );
+	free(g_pool->threads);
+	viso_job *head = NULL;
+	while (g_pool->jobs) {
+		head = g_pool->jobs;
+		g_pool->jobs = g_pool->jobs->next;
+		free(head);
+	}
+
+	pthread_mutex_destroy(&g_pool->pool_lock);
+	pthread_cond_destroy(&g_pool->job_ready);
+	//free(g_pool);
+	//g_pool = NULL;
+
+	return 0;
+}
+
+/*
+ * 常规线程(执行线程函数)
+ */
+void *viso_threadPool_routine(void *arg) {
+	viso_job *job = NULL;
+
+	while (1) {
+		pthread_mutex_lock(&g_pool->pool_lock);
+		while (g_pool->size == 0 && !g_pool->destroy) 	//这个循环检测链表内是否有数据，以及是否要销毁线程
+			pthread_cond_wait(&g_pool->job_ready, &g_pool->pool_lock);
+
+		if (g_pool->destroy) {
+			pthread_mutex_unlock(&g_pool->pool_lock);
+			pthread_exit(NULL );
+		}
+		//assert(g_pool->size != 0);
+		//assert(g_pool->jobs != NULL );
+		g_pool->size--;
+		job = g_pool->jobs;
+		g_pool->jobs = job->next;
+		pthread_mutex_unlock(&g_pool->pool_lock);
+		(job->process)(job->arg);
+		free(job);
+		job = NULL;
+	}
+	pthread_exit(NULL );
+	return NULL ;
+}
