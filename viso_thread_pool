@@ -2,7 +2,7 @@
  * viso_thread_pool.c
  *
  *  Created on: 2008-1-5
- *      Author: Administrator
+ *      Author: fun
  */
 
 #include "../inc/viso_thread_pool.h"
